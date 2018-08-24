@@ -73,7 +73,9 @@ namespace AWSTerminator
                     if (cOn.IsNullOrEmpty() && cOff.IsNullOrEmpty() && cKill.IsNullOrEmpty())
                         return;
 
-                    await ProcessTags(instance, cOn: cOn, cOff: cOff, cKill: cKill, logger: logger);
+                    var ex = await ProcessTags(instance, cOn: cOn, cOff: cOff, cKill: cKill, logger: logger).CatchExceptionAsync();
+                    if (ex != null)
+                        logger.Log($"Failed Update or Tag Validation of EC2 Instance {instance.InstanceId} ({instance.GetTagValueOrDefault("Name")}), Auto On: '{cOn}', Auto Off: '{cOff}', Auto Kill: '{cKill}', Exception: {ex.JsonSerializeAsPrettyException()}");
                 });
 
             logger.Log($"Finished Processing and Tag Validation of EC2 Instance {instance.InstanceId} ({instance.GetTagValueOrDefault("Name")}), DisableAll: {disableAll}");
@@ -81,52 +83,36 @@ namespace AWSTerminator
 
         public async Task ProcessTags(Amazon.EC2.Model.Instance instance, string cOn, string cOff, string cKill, ILambdaLogger logger)
         {
-            try
+            var isRunning = instance.State.Name == InstanceStateName.Running;
+            var isStopped = instance.State.Name == InstanceStateName.Stopped;
+            var isTerminated = instance.State.Name == InstanceStateName.Terminated;
+            var on = cOn.IsNullOrEmpty() ? -2 : cOn.ToCron().Compare(DateTime.UtcNow);
+            var off = cOff.IsNullOrEmpty() ? -2 : cOff.ToCron().Compare(DateTime.UtcNow);
+            var kill = cKill.IsNullOrEmpty() ? -2 : cKill.ToCron().Compare(DateTime.UtcNow);
+
+            if (off == 0 && on == 0)
+                throw new Exception("Auto On and Off are in invalid state, both are enabled, if possible set the cron not to overlap.");
+
+            if (isRunning && (off == 0 || kill == 0))
             {
-                bool isRunning = instance.State.Name == InstanceStateName.Running;
-                bool isStopped = instance.State.Name == InstanceStateName.Stopped;
-                bool isTerminated = instance.State.Name == InstanceStateName.Terminated;
-                int off = -2;
-                int on = -2;
-                int kill = -2;
-
-                if (!cOff.IsNullOrEmpty())
-                    off = cOff.ToCron().Compare(DateTime.UtcNow);
-
-                if (!cOn.IsNullOrEmpty())
-                    on = cOn.ToCron().Compare(DateTime.UtcNow);
-
-                if (!cKill.IsNullOrEmpty())
-                    kill = cOn.ToCron().Compare(DateTime.UtcNow);
-
-                if (off == 0 && on == 0)
-                    throw new Exception("Auto On and Off are in invalid state, both are enabled, if possible set the cron not to overlap.");
-
-                if (isRunning && (off == 0 || kill == 0))
-                {
-                    logger.Log($"Stopping EC2 Instance {instance.InstanceId} ({instance.GetTagValueOrDefault("Name")}), Cron: {cOff}");
-                    var result = await _EC2.StopInstance(instanceId: instance.InstanceId, force: false);
-                    logger.Log($"EC2 Instance {instance.InstanceId} ({instance.GetTagValueOrDefault("Name")}), StateChange: {result.JsonSerialize(Newtonsoft.Json.Formatting.Indented)}");
-                    return;
-                }
-                else if (isStopped && (on == 0 && kill != 0))
-                {
-                    logger.Log($"Starting EC2 Instance {instance.InstanceId} ({instance.GetTagValueOrDefault("Name")}), Cron: {cOn}");
-                    var result = await _EC2.StartInstance(instanceId: instance.InstanceId, additionalInfo: $"AWSTerminator Auto On, Cron: {cOn}");
-                    logger.Log($"EC2 Instance {instance.InstanceId} ({instance.GetTagValueOrDefault("Name")}), StateChange: {result.JsonSerialize(Newtonsoft.Json.Formatting.Indented)}");
-                    return;
-                }
-                else if(isStopped && kill == 0)
-                {
-                    logger.Log($"Terminating EC2 Instance {instance.InstanceId} ({instance.GetTagValueOrDefault("Name")}), Cron: {cOff}");
-                    var result = await _EC2.TerminateInstance(instanceId: instance.InstanceId);
-                    logger.Log($"EC2 Instance {instance.InstanceId} ({instance.GetTagValueOrDefault("Name")}), StateChange: {result.JsonSerialize(Newtonsoft.Json.Formatting.Indented)}");
-                    return;
-                }
+                logger.Log($"Stopping EC2 Instance {instance.InstanceId} ({instance.GetTagValueOrDefault("Name")}), Cron: {cOff}");
+                var result = await _EC2.StopInstance(instanceId: instance.InstanceId, force: false);
+                logger.Log($"EC2 Instance {instance.InstanceId} ({instance.GetTagValueOrDefault("Name")}), StateChange: {result.JsonSerialize(Newtonsoft.Json.Formatting.Indented)}");
+                return;
             }
-            catch (Exception ex)
+            else if (isStopped && (on == 0 && kill != 0))
             {
-                logger.Log($"Failed Update or Tag Validation of EC2 Instance {instance.InstanceId} ({instance.GetTagValueOrDefault("Name")}), Auto On: '{cOn}', Auto Off: '{cOff}', Auto Kill: '{cKill}', Exception: {ex.JsonSerializeAsPrettyException(Newtonsoft.Json.Formatting.Indented)}");
+                logger.Log($"Starting EC2 Instance {instance.InstanceId} ({instance.GetTagValueOrDefault("Name")}), Cron: {cOn}");
+                var result = await _EC2.StartInstance(instanceId: instance.InstanceId, additionalInfo: $"AWSTerminator Auto On, Cron: {cOn}");
+                logger.Log($"EC2 Instance {instance.InstanceId} ({instance.GetTagValueOrDefault("Name")}), StateChange: {result.JsonSerialize(Newtonsoft.Json.Formatting.Indented)}");
+                return;
+            }
+            else if (isStopped && kill == 0)
+            {
+                logger.Log($"Terminating EC2 Instance {instance.InstanceId} ({instance.GetTagValueOrDefault("Name")}), Cron: {cOff}");
+                var result = await _EC2.TerminateInstance(instanceId: instance.InstanceId);
+                logger.Log($"EC2 Instance {instance.InstanceId} ({instance.GetTagValueOrDefault("Name")}), StateChange: {result.JsonSerialize(Newtonsoft.Json.Formatting.Indented)}");
+                return;
             }
         }
     }
