@@ -19,12 +19,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\Asmodat Standard\Asmodat Standard\Asmodat Standard.csproj">
-      <Private>true</Private>
-    </ProjectReference>
-    <ProjectReference Include="..\AWSWrapper\AWSWrapper.csproj">
-      <Private>true</Private>
-    </ProjectReference>
+    <ProjectReference Include="..\AWSWrapper\AWSWrapper.csproj" />
   </ItemGroup>
 
 </Project>
